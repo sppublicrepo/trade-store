@@ -1,5 +1,5 @@
 @startuml Trade Store Class Diagram
-title Trade Store - System Architecture
+title Trade Store - Complete System Architecture
 
 package "Controller Layer" {
     class TradeController {
@@ -9,7 +9,7 @@ package "Controller Layer" {
         +getAllTrades(): ResponseEntity<List<Trade>>
         +publishTrade(dto): ResponseEntity<String>
     }
-    
+
     class GlobalExceptionHandler {
         +handleInvalidTrade(ex): ResponseEntity<Map>
         +handleGeneric(ex): ResponseEntity<Map>
@@ -24,13 +24,20 @@ package "Service Layer" {
         +getAllTrades(): List<Trade>
         +markExpiredTrades(): void
     }
-    
+
     class TradeProducer {
         -kafkaTemplate: KafkaTemplate
         -objectMapper: ObjectMapper
+        -tradeTopic: String
         +publishTrade(dto): void
     }
-    
+
+    class TradeConsumer {
+        -tradeService: TradeService
+        -objectMapper: ObjectMapper
+        +consumeTrade(message): void
+    }
+
     class TradeScheduler {
         -tradeService: TradeService
         +checkExpiredTrades(): void
@@ -38,12 +45,17 @@ package "Service Layer" {
 }
 
 package "Repository Layer" {
-    interface TradeRepository extends JpaRepository {
-        +findByBookIdAndCounterPartyId(): Optional<Trade>
-        +findByExpiredFalseAndMaturityDateBefore(): List<Trade>
+    interface TradeRepository {
+        +findById(id): Optional<Trade>
+        +save(trade): Trade
+        +findAll(): List<Trade>
+        +findByBookIdAndCounterPartyId(bookId, counterPartyId): Optional<Trade>
+        +findByExpiredFalseAndMaturityDateBefore(date): List<Trade>
     }
-    
-    interface TradeHistoryRepository extends MongoRepository {
+
+    interface TradeHistoryRepository {
+        +save(history): TradeHistory
+        +findAll(): List<TradeHistory>
     }
 }
 
@@ -57,7 +69,7 @@ package "Model Layer" {
         -createdDate: LocalDate
         -expired: boolean
     }
-    
+
     class TradeHistory {
         -id: UUID
         -tradeId: UUID
@@ -69,7 +81,7 @@ package "Model Layer" {
         -expired: boolean
         -recordedDate: LocalDate
     }
-    
+
     class TradeDto {
         -tradeId: UUID
         -version: int
@@ -79,35 +91,116 @@ package "Model Layer" {
     }
 }
 
-package "Exception Layer" {
-    class InvalidTradeException extends RuntimeException {
-        +InvalidTradeException(message)
-    }
-}
-
-package "Configuration" {
+package "Configuration Layer" {
     class KafkaConfig {
+        -tradeTopic: String
         +tradeTopic(): NewTopic
     }
-    
+
     class KafkaProducerConfig {
         +producerFactory(): ProducerFactory
         +kafkaTemplate(): KafkaTemplate
     }
+
+    class TradeStoreApplication {
+        +main(args): void
+    }
+}
+
+package "Exception Layer" {
+    class InvalidTradeException {
+        +InvalidTradeException(message)
+    }
+}
+
+package "Test Layer" <<Test>> {
+    class TradeServiceTest {
+        -tradeRepository: TradeRepository
+        -tradeHistoryRepository: TradeHistoryRepository
+        -tradeService: TradeService
+        +shouldRejectTradeWithPastMaturityDate()
+        +shouldRejectTradeWithLowerVersion()
+        +shouldSaveNewTrade()
+        +shouldUpdateExistingTradeWithSameVersion()
+        +shouldUpdateExistingTradeWithHigherVersion()
+        +getAllTrades_shouldReturnList()
+        +markExpiredTrades_shouldMarkAndSave()
+        +markExpiredTrades_shouldDoNothingIfNoExpiredTrades()
+    }
+
+    class TradeControllerTest {
+        -mockMvc: MockMvc
+        -tradeService: TradeService
+        -tradeProducer: TradeProducer
+        +shouldReturn201WhenTradeCreatedSuccessfully()
+        +shouldReturn400WhenValidationFails()
+        +shouldReturn400WhenLowerVersionProvided()
+        +shouldReturn500WhenUnexpectedErrorOccurs()
+        +shouldReturnAllTradesSuccessfully()
+        +shouldReturnEmptyListWhenNoTrades()
+        +shouldPublishTradeToKafkaSuccessfully()
+        +shouldHandleKafkaPublishingError()
+        +shouldHandleEmptyRequestBody()
+        +shouldHandleInvalidJson()
+        +shouldHandleMissingRequestBody()
+    }
+
+    class TradeRepositoryTest {
+        -entityManager: TestEntityManager
+        -tradeRepository: TradeRepository
+        +shouldFindByBookIdAndCounterPartyId()
+        +shouldNotFindByBookIdAndCounterPartyIdWhenNotExists()
+        +shouldFindByBookIdAndCounterPartyIdWithDifferentVersions()
+        +shouldFindExpiredTradesByMaturityDate()
+        +shouldReturnEmptyListWhenNoExpiredTrades()
+        +shouldFindMultipleExpiredTrades()
+        +shouldSaveAndRetrieveTradeById()
+        +shouldUpdateExistingTrade()
+        +shouldDeleteTradeById()
+        +shouldFindAllTrades()
+    }
+
+    class KafkaIntegrationTest {
+        -tradeProducer: TradeProducer
+        -embeddedKafkaBroker: EmbeddedKafkaBroker
+        -objectMapper: ObjectMapper
+        -tradeService: TradeService
+        +shouldPublishAndConsumeTradeMessage()
+        +shouldProcessTradeMessagesThroughConsumer()
+        +shouldHandleMultipleTradeMessages()
+        +shouldHandleTradeWithDifferentVersions()
+        +shouldHandleJsonSerializationCorrectly()
+        +shouldVerifyPartitioningWorks()
+    }
 }
 
 ' Relationships
-TradeController --> TradeService
-TradeController --> TradeProducer
-TradeController --> TradeDto
-TradeService --> TradeRepository  
-TradeService --> TradeHistoryRepository
-TradeService --> Trade
-TradeService --> TradeHistory
-TradeService --> TradeDto
-TradeProducer --> TradeDto
-TradeRepository --> Trade
-TradeHistoryRepository --> TradeHistory
-GlobalExceptionHandler --> InvalidTradeException
+TradeController --> TradeService : uses
+TradeController --> TradeProducer : uses
+TradeController ..> TradeDto : uses
+GlobalExceptionHandler ..> InvalidTradeException : handles
+
+TradeService --> TradeRepository : uses
+TradeService --> TradeHistoryRepository : uses
+TradeService ..> Trade : creates
+TradeService ..> TradeHistory : creates
+TradeService ..> TradeDto : receives
+TradeService ..> InvalidTradeException : throws
+
+TradeProducer ..> TradeDto : publishes
+TradeConsumer --> TradeService : calls
+TradeConsumer ..> TradeDto : consumes
+
+TradeScheduler --> TradeService : schedules
+
+TradeRepository ..> Trade : manages
+TradeHistoryRepository ..> TradeHistory : manages
+
+' Test relationships
+TradeServiceTest --> TradeService : tests
+TradeControllerTest --> TradeController : tests
+TradeRepositoryTest --> TradeRepository : tests
+KafkaIntegrationTest --> TradeProducer : tests
+KafkaIntegrationTest --> TradeConsumer : tests
 
 @enduml

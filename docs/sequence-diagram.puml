@@ -1,13 +1,17 @@
 @startuml Trade Processing Sequence
-title Trade Store - Trade Processing Flow
+title Trade Store - Complete Processing Flow
 
 actor Client
 participant Controller as "TradeController"
-participant Service as "TradeService" 
+participant Service as "TradeService"
 participant Producer as "TradeProducer"
+participant Consumer as "TradeConsumer"
 participant PostgreSQL as "PostgreSQL\n(Trade Store)"
 participant MongoDB as "MongoDB\n(History Store)"
-participant Kafka as "Kafka Topic"
+participant Kafka as "Kafka Topic\n(trades)"
+participant Scheduler as "TradeScheduler\n(Cron Job)"
+
+== Synchronous Trade Processing ==
 
 Client -> Controller: POST /api/trades
 activate Controller
@@ -23,32 +27,120 @@ alt Validation Failed
 else Validation Passed
     Service -> PostgreSQL: findById(tradeId)
     PostgreSQL --> Service: existing trade (if any)
-    
-    Service -> Service: process business logic
+
+    Service -> Service: process business logic\n(version check, create/update)
+
     Service -> PostgreSQL: save(trade)
     PostgreSQL --> Service: saved trade
-    
+
     Service -> MongoDB: save(tradeHistory)
+    activate MongoDB
     MongoDB --> Service: saved history
-    
-    Service --> Controller: saved trade
+    deactivate MongoDB
+
+    Service --> Controller: trade
+    deactivate Service
+    Controller --> Client: 201 Created with trade
+    deactivate Controller
 end
 
-deactivate Service
+== Asynchronous Kafka Publishing ==
+
+Client -> Controller: POST /api/trades/publish
+activate Controller
 
 Controller -> Producer: publishTrade(dto)
 activate Producer
-Producer -> Kafka: send(trade json)
-Kafka --> Producer: ack
-deactivate Producer
 
-Controller --> Client: 201 Created + Trade
+Producer -> Producer: serialize to JSON
+Producer -> Kafka: send(topic, json)
+activate Kafka
+Kafka --> Producer: ack
+deactivate Kafka
+
+Producer --> Controller: success
+deactivate Producer
+Controller --> Client: 200 OK "Published successfully"
 deactivate Controller
 
-note right of Kafka
-  Trade published to 
-  'trades' topic for 
-  downstream processing
-end note
+== Asynchronous Kafka Consumption ==
+
+Kafka -> Consumer: consumeTrade(message)
+activate Consumer
+
+Consumer -> Consumer: deserialize JSON to TradeDto
+Consumer -> Service: saveTrade(dto)
+activate Service
+
+Service -> PostgreSQL: save(trade)
+Service -> MongoDB: save(tradeHistory)
+
+Service --> Consumer: trade
+deactivate Service
+Consumer -> Consumer: log success
+deactivate Consumer
+
+== Trade Retrieval ==
+
+Client -> Controller: GET /api/trades
+activate Controller
+
+Controller -> Service: getAllTrades()
+activate Service
+
+Service -> PostgreSQL: findAll()
+PostgreSQL --> Service: List<Trade>
+
+Service --> Controller: trades list
+deactivate Service
+Controller --> Client: 200 OK with trades
+deactivate Controller
+
+== Scheduled Expiry Processing ==
+
+note over Scheduler: Runs daily at midnight\n@Scheduled(cron = "0 0 0 * * ?")
+
+Scheduler -> Service: markExpiredTrades()
+activate Service
+
+Service -> PostgreSQL: findByExpiredFalseAndMaturityDateBefore(today)
+PostgreSQL --> Service: expired trades list
+
+loop for each expired trade
+    Service -> Service: set expired = true
+    Service -> PostgreSQL: save(expiredTrade)
+    Service -> MongoDB: save(tradeHistory)
+end
+
+Service --> Scheduler: completion
+deactivate Service
+
+== Error Handling Scenarios ==
+
+alt Database Connection Failed
+    Client -> Controller: POST /api/trades
+    Controller -> Service: saveTrade(dto)
+    Service -> PostgreSQL: save(trade)
+    PostgreSQL --> Service: SQLException
+    Service --> Controller: RuntimeException
+    Controller --> Client: 500 Internal Server Error
+end
+
+alt Kafka Connection Failed
+    Client -> Controller: POST /api/trades/publish
+    Controller -> Producer: publishTrade(dto)
+    Producer -> Kafka: send(topic, json)
+    Kafka --> Producer: KafkaException
+    Producer --> Controller: RuntimeException
+    Controller --> Client: 500 Internal Server Error
+end
+
+alt Invalid Trade Data
+    Client -> Controller: POST /api/trades
+    Controller -> Service: saveTrade(dto)
+    Service -> Service: validate(dto)
+    Service --> Controller: InvalidTradeException
+    Controller --> Client: 400 Bad Request\n{"error": "Invalid Trade", "message": "..."}
+end
 
 @enduml
