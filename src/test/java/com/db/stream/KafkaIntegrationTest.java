@@ -31,9 +31,6 @@ import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.timeout;
-import static org.mockito.Mockito.verify;
 
 @SpringBootTest
 @EmbeddedKafka(
@@ -260,11 +257,7 @@ class KafkaIntegrationTest {
         // Verify JSON structure
         String jsonMessage = received.value();
         assertThat(jsonMessage).contains("tradeId");
-        /*assertThat(jsonMessage).contains("version":5);
-        assertThat(jsonMessage).contains("bookId":"JSON_TEST");
-        assertThat(jsonMessage).contains("counterPartyId":"CP_JSON");
-        assertThat(jsonMessage).contains("maturityDate");
-*/
+
         // Verify deserialization
         TradeDto deserializedDto = objectMapper.readValue(jsonMessage, TradeDto.class);
         assertThat(deserializedDto.getTradeId()).isEqualTo(tradeId);

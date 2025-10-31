@@ -1,5 +1,6 @@
 package com.db.config;
 
+import com.db.service.TradeScheduler;
 import com.db.service.TradeService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;

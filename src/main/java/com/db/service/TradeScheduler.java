@@ -1,6 +1,5 @@
-package com.db.config;
+package com.db.service;
 
-import com.db.service.TradeService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.scheduling.annotation.Scheduled;

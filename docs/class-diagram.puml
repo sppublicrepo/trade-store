@@ -20,9 +20,11 @@ package "Service Layer" {
     class TradeService {
         -tradeRepository: TradeRepository
         -tradeHistoryRepository: TradeHistoryRepository
+		-tradeProducer: TradeProducer 
         +saveTrade(dto): Trade
+		+saveTradeHistory(Trade): void
         +getAllTrades(): List<Trade>
-        +markExpiredTrades(): void
+		+publishTradeEvent(dto): void        
     }
 
     class TradeProducer {
@@ -30,6 +32,7 @@ package "Service Layer" {
         -objectMapper: ObjectMapper
         -tradeTopic: String
         +publishTrade(dto): void
+		+publishTrade(dto, topicName): void
     }
 
     class TradeConsumer {
@@ -46,7 +49,6 @@ package "Service Layer" {
 
 package "Repository Layer" {
     interface TradeRepository {
-        +findById(id): Optional<Trade>
         +save(trade): Trade
         +findAll(): List<Trade>
         +findByBookIdAndCounterPartyId(bookId, counterPartyId): Optional<Trade>
@@ -98,9 +100,17 @@ package "Configuration Layer" {
     }
 
     class KafkaProducerConfig {
+		-bootstrapServers: String
         +producerFactory(): ProducerFactory
         +kafkaTemplate(): KafkaTemplate
     }
+	
+	class KafkaConsumerConfig {
+		-bootstrapServers: String
+		-groupId: String
+		-autoOffsetReset: String
+		+consumerFactory: ConsumerFactory
+	}
 
     class TradeStoreApplication {
         +main(args): void
@@ -132,6 +142,7 @@ package "Test Layer" <<Test>> {
         -mockMvc: MockMvc
         -tradeService: TradeService
         -tradeProducer: TradeProducer
+		-objectMapper: ObjectMapper
         +shouldReturn201WhenTradeCreatedSuccessfully()
         +shouldReturn400WhenValidationFails()
         +shouldReturn400WhenLowerVersionProvided()
@@ -139,8 +150,7 @@ package "Test Layer" <<Test>> {
         +shouldReturnAllTradesSuccessfully()
         +shouldReturnEmptyListWhenNoTrades()
         +shouldPublishTradeToKafkaSuccessfully()
-        +shouldHandleKafkaPublishingError()
-        +shouldHandleEmptyRequestBody()
+        +shouldHandleKafkaPublishingError()        
         +shouldHandleInvalidJson()
         +shouldHandleMissingRequestBody()
     }
@@ -165,8 +175,8 @@ package "Test Layer" <<Test>> {
         -embeddedKafkaBroker: EmbeddedKafkaBroker
         -objectMapper: ObjectMapper
         -tradeService: TradeService
-        +shouldPublishAndConsumeTradeMessage()
-        +shouldProcessTradeMessagesThroughConsumer()
+		-tradeTopic: String
+        +shouldPublishAndConsumeTradeMessage()        
         +shouldHandleMultipleTradeMessages()
         +shouldHandleTradeWithDifferentVersions()
         +shouldHandleJsonSerializationCorrectly()
@@ -177,7 +187,7 @@ package "Test Layer" <<Test>> {
 ' Relationships
 TradeController --> TradeService : uses
 TradeController --> TradeProducer : uses
-TradeController ..> TradeDto : uses
+TradeController ..> TradeDto : receives
 GlobalExceptionHandler ..> InvalidTradeException : handles
 
 TradeService --> TradeRepository : uses
